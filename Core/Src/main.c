@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "eeprom.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +49,10 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 volatile int32_t currentCount=0;
 uint8_t mode=0;
+
+uint16_t VirtAddVarTab[3] = {0x5555, 0x6666, 0x7777};
+uint16_t VarDataTab[3] = {0, 0, 0};
+//uint16_t VarValue,VarDataTmp = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -56,9 +61,10 @@ static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
-
 /* USER CODE BEGIN PFP */
 static void count_encoder_value(void);
+static uint8_t save_100mm_encoder_counter(uint16_t value);
+static uint16_t read_100mm_encoder_counter(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -97,11 +103,16 @@ int main(void)
   MX_TIM1_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
-
   /* USER CODE BEGIN 2 */
   printf("Encoder Started!!\r\n");
-  HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
-  HAL_TIM_Base_Start_IT(&htim1);
+
+  save_100mm_encoder_counter(34567);
+//  read_100mm_encoder_counter();
+
+  printf("EEPROM Emulation W/R Test : %d\r\n",read_100mm_encoder_counter());
+
+//  HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+//  HAL_TIM_Base_Start_IT(&htim1);
 
   /* USER CODE END 2 */
 
@@ -204,15 +215,12 @@ static void MX_TIM1_Init(void)
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
   sConfig.IC2Filter = 0;
-
   if (HAL_TIM_Encoder_Init(&htim1, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-
   if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
@@ -279,6 +287,7 @@ static void MX_USART2_UART_Init(void)
   huart2.Init.Mode = UART_MODE_TX_RX;
   huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+
   if (HAL_UART_Init(&huart2) != HAL_OK)
   {
     Error_Handler();
@@ -446,6 +455,50 @@ void count_encoder_value(void)
 {
 	currentCount =  __HAL_TIM_GET_COUNTER(&htim1);
 	printf("currentCount : %ld\r\n", currentCount);
+}
+
+uint8_t save_100mm_encoder_counter(uint16_t VarValue)
+{
+    HAL_FLASH_Unlock();
+
+	if( EE_Init() != EE_OK)
+	{
+		Error_Handler();
+	}
+
+	if((EE_WriteVariable(VirtAddVarTab[0],  VarValue)) != HAL_OK)
+	{
+		Error_Handler();
+	}
+
+	if((EE_ReadVariable(VirtAddVarTab[0],  &VarDataTab[0])) != HAL_OK)
+	{
+		Error_Handler();
+	}
+
+	HAL_FLASH_Lock();
+
+	if (VarValue != VarDataTab[0])
+	{
+		Error_Handler();
+	}
+
+	return 1;
+}
+
+uint16_t read_100mm_encoder_counter(void)
+{
+	if( EE_Init() != EE_OK)
+	{
+		Error_Handler();
+	}
+
+	if((EE_ReadVariable(VirtAddVarTab[0],  &VarDataTab[0])) != HAL_OK)
+	{
+		Error_Handler();
+	}
+
+	return VarDataTab[0];
 }
 
 /* USER CODE END 4 */
