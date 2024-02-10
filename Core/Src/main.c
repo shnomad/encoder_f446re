@@ -32,7 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define debug 0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -47,8 +47,12 @@ UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-volatile int32_t currentCount=0;
+volatile int32_t currentCount=0, prevCount=0, tempCount=0, count_diff=0;
+volatile uint32_t encoder_cnt_total=0, encoder_cnt_section=0;
+uint16_t encoder_cnt_unit_100mm=0;
 uint8_t mode=0;
+
+uint8_t aTxBuffer[2] ={0x0,};
 
 uint16_t VirtAddVarTab[3] = {0x5555, 0x6666, 0x7777};
 uint16_t VarDataTab[3] = {0, 0, 0};
@@ -63,8 +67,11 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 static void count_encoder_value(void);
+static void count_encoder_value_diff(void);
+static void clear_encoder_counter(void);
 static uint8_t save_100mm_encoder_counter(uint16_t value);
 static uint16_t read_100mm_encoder_counter(void);
+static void sent_data_to_dmi(uint16_t data);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -106,12 +113,11 @@ int main(void)
   /* USER CODE BEGIN 2 */
   printf("Encoder Started!!\r\n");
 
-  save_100mm_encoder_counter(34567);
-//  read_100mm_encoder_counter();
+//save_100mm_encoder_counter(34567);
+//read_100mm_encoder_counter();
+/*printf("EEPROM Emulation W/R Test : %d\r\n",read_100mm_encoder_counter());*/
 
-  printf("EEPROM Emulation W/R Test : %d\r\n",read_100mm_encoder_counter());
-
-//  HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
 //  HAL_TIM_Base_Start_IT(&htim1);
 
   /* USER CODE END 2 */
@@ -287,7 +293,6 @@ static void MX_USART2_UART_Init(void)
   huart2.Init.Mode = UART_MODE_TX_RX;
   huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-
   if (HAL_UART_Init(&huart2) != HAL_OK)
   {
     Error_Handler();
@@ -325,7 +330,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : ENC_MODE_INT_Pin */
   GPIO_InitStruct.Pin = ENC_MODE_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(ENC_MODE_INT_GPIO_Port, &GPIO_InitStruct);
 
@@ -365,7 +370,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	if(GPIO_Pin == ENC_INDEX_INT_Pin)
 	{
 		printf("Encoder Z\r\n");
-		count_encoder_value();
+		count_encoder_value_diff();
 	}
 	else if(GPIO_Pin == ENC_MODE_INT_Pin)
 	{
@@ -406,11 +411,21 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 				printf("dmi-mode : START_DISTANCE_CALIBRATION\r\n");
 
+				/*Encoder Z index interrupt*/
+ 				HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+ 				HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+
 			break;
 
 			case STOP_DISTANCE_CALIBRATION:			  	//0x5
 
 				printf("dmi-mode : STOP_DISTANCE_CALIBRATION\r\n");
+
+				/*Encoder Z index interrupt*/
+				HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
+				HAL_TIM_Encoder_Stop(&htim1, TIM_CHANNEL_ALL);
+
+				count_encoder_value_diff();
 
 			break;
 
@@ -457,6 +472,39 @@ void count_encoder_value(void)
 	printf("currentCount : %ld\r\n", currentCount);
 }
 
+void count_encoder_value_diff(void)
+{
+	currentCount =  __HAL_TIM_GET_COUNTER(&htim1);
+	printf("currentCount : %ld\r\n", currentCount);
+
+	if(currentCount - prevCount<0)
+	{
+		count_diff = currentCount - prevCount + 65536;
+	}
+	else
+	{
+		count_diff = currentCount - prevCount;
+	}
+
+	encoder_cnt_total+=count_diff;
+
+ 	printf("count_diff : %ld\r\n", count_diff);
+ 	printf("encoder_cnt_total : %ld\r\n", encoder_cnt_total);
+
+	sent_data_to_dmi(count_diff);
+
+	tempCount = currentCount;
+	prevCount = tempCount;
+	currentCount = 0;
+	count_diff = 0;
+}
+
+void clear_encoder_counter(void)
+{
+	currentCount=0, prevCount=0, tempCount=0, count_diff=0;
+	encoder_cnt_total=0, encoder_cnt_section=0;
+}
+
 uint8_t save_100mm_encoder_counter(uint16_t VarValue)
 {
     HAL_FLASH_Unlock();
@@ -500,6 +548,34 @@ uint16_t read_100mm_encoder_counter(void)
 
 	return VarDataTab[0];
 }
+
+
+void sent_data_to_dmi(uint16_t data)
+{
+	if(data>0)
+	{
+		aTxBuffer[0] = data>>8;
+		aTxBuffer[1] = data;
+
+//		if(HAL_UART_Transmit_IT(&huart1, (uint8_t*)aTxBuffer, sizeof(aTxBuffer))!= HAL_OK)
+		if(HAL_UART_Transmit(&huart1, (uint8_t*)aTxBuffer, sizeof(aTxBuffer),0xFFFF)!= HAL_OK)
+		{
+			Error_Handler();
+		}
+
+	}
+}
+
+#if 0
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *UartHandle)
+{
+
+	if(UartHandle == &huart1)
+	  {
+		printf("uart Tx complete\r\n");
+	  }
+}
+#endif
 
 /* USER CODE END 4 */
 
